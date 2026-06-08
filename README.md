@@ -10,13 +10,13 @@ cmake --build build -j
 ## run
 
 ```bash
-./build/multicam_capture_gui
+./build/multicam_capture_gui -o June28-Ponca --row 13
 ```
 
 For windowed mode:
 
 ```bash
-./build/multicam_capture_gui --windowed
+./build/multicam_capture_gui --output June28-Ponca --row 13 --windowed
 ```
 
 Qt5 Widgets and OpenCV are required.
@@ -29,16 +29,16 @@ sudo apt install cmake g++ qtbase5-dev libopencv-dev
 
 Keyboard controls: `Enter`/`Space` capture, `R` reconnect, `F` fullscreen,
 `Q`/`Esc` exit. Full-resolution PNGs and `session.log` are written under
-`~/record_data/captures/YYYYMMDD_HHMMSS/`. If `session_name` is set in the
-config, the folder becomes `YYYYMMDD_HHMMSS_<session_name>/`. File names stay
+`~/record_data/captures/YYYYMMDD_HHMMSS_<output>-row<row>/`, for example
+`~/record_data/captures/20260608_150337_June28-Ponca-row13/`. File names stay
 camera-oriented, such as `image_000000_cam0_192.168.0.20.png`. If keyboard
 capture is inactive, the window shows `CLICK WINDOW TO ENABLE KEYBOARD CAPTURE`.
 
 The GUI config file is `~/.config/multicam_capture/config.json`. If it does
 not exist, the app creates a default config for cameras `192.168.0.20` through
 `192.168.0.23`. If this file exists, verify the RTSP URLs before recording.
-Set `session_name` to add an arbitrary label to the automatically dated output
-folder.
+The output label and row must be entered on every launch with `-o`/`--output`
+and `--row`.
 Bad or stale camera streams are shown in red and are not saved as successes.
 Set a camera `url` to an empty string to disable that camera slot. Disabled
 slots are skipped and do not count as failed captures.

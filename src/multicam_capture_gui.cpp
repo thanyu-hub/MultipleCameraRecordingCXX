@@ -60,7 +60,6 @@ struct CameraConfig {
 
 struct AppConfig {
     std::string saveRoot;
-    std::string sessionName;
     std::vector<CameraConfig> cameras;
 };
 
@@ -178,7 +177,6 @@ std::string defaultRtspUrlForIp(const std::string& ip) {
 AppConfig defaultConfig() {
     return AppConfig{
         defaultSaveRoot(),
-        "",
         {
             {"Camera 1", "192.168.0.20", defaultRtspUrlForIp("192.168.0.20")},
             {"Camera 2", "192.168.0.21", defaultRtspUrlForIp("192.168.0.21")},
@@ -201,22 +199,26 @@ void useUnconfiguredCameras(AppConfig& config) {
     config.cameras = unconfiguredCameras();
 }
 
-std::string makeSessionFolderName(const std::string& sessionTimestamp, const std::string& sessionName) {
-    if (sessionName.empty()) {
+std::string makeSessionFolderName(const std::string& sessionTimestamp, const std::string& outputLabel) {
+    if (outputLabel.empty()) {
         return sessionTimestamp;
     }
-    return sessionTimestamp + "_" + sanitizeForFilename(sessionName);
+    return sessionTimestamp + "_" + outputLabel;
+}
+
+std::string makeOutputLabel(const std::string& outputName, int rowNumber) {
+    return sanitizeForFilename(outputName) + "-row" + std::to_string(rowNumber);
 }
 
 bool createUniqueSessionDirectory(
     const fs::path& saveRoot,
     const std::string& sessionTimestamp,
-    const std::string& sessionName,
+    const std::string& outputLabel,
     fs::path& saveDir,
     std::string& error) {
     try {
         fs::create_directories(saveRoot);
-        const std::string baseName = makeSessionFolderName(sessionTimestamp, sessionName);
+        const std::string baseName = makeSessionFolderName(sessionTimestamp, outputLabel);
         for (int suffix = 0; suffix < 1000; ++suffix) {
             std::ostringstream name;
             name << baseName;
@@ -244,7 +246,6 @@ bool isFreshFrameAge(double secondsSinceFrame) {
 std::string appConfigToJson(const AppConfig& config) {
     QJsonObject root;
     root["save_root"] = QString::fromStdString(config.saveRoot);
-    root["session_name"] = QString::fromStdString(config.sessionName);
 
     QJsonArray cameras;
     for (const auto& camera : config.cameras) {
@@ -300,7 +301,6 @@ bool readOptionalJsonString(const QJsonObject& object, const QString& key, std::
 
 bool loadConfig(const fs::path& path, AppConfig& config, std::vector<std::string>& startupMessages) {
     config.saveRoot = defaultSaveRoot();
-    config.sessionName.clear();
     useUnconfiguredCameras(config);
     if (!fs::exists(path)) {
         config = defaultConfig();
@@ -338,13 +338,6 @@ bool loadConfig(const fs::path& path, AppConfig& config, std::vector<std::string
         config.saveRoot = expandTilde(saveRootValue.toString().toStdString());
     } else {
         startupMessages.push_back("Config is missing save_root. Using default save root.");
-    }
-
-    std::string sessionName;
-    if (readOptionalJsonString(root, "session_name", sessionName)) {
-        config.sessionName = sessionName;
-    } else {
-        startupMessages.push_back("Config session_name must be a string. Using automatic timestamp only.");
     }
 
     const QJsonValue camerasValue = root.value("cameras");
@@ -1509,8 +1502,34 @@ bool joinCameraWorkersWithTimeout(std::vector<std::shared_ptr<CameraWorker>>& wo
     return anyDetached;
 }
 
+bool parsePositiveRowNumber(const std::string& value, int& rowNumber) {
+    if (value.empty()) {
+        return false;
+    }
+    for (unsigned char ch : value) {
+        if (!std::isdigit(ch)) {
+            return false;
+        }
+    }
+
+    try {
+        const long long parsed = std::stoll(value);
+        if (parsed <= 0 || parsed > 1000000) {
+            return false;
+        }
+        rowNumber = static_cast<int>(parsed);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 void printUsage(const char* argv0) {
-    std::cout << "Usage: " << argv0 << " [--config PATH] [--windowed]\n"
+    std::cout << "Usage: " << argv0 << " -o NAME --row ROW [--config PATH] [--windowed]\n"
+              << "\n"
+              << "Required output options:\n"
+              << "  -o, --output NAME  Output label appended to the dated session folder\n"
+              << "  --row ROW          Positive row number appended as rowROW\n"
               << "\n"
               << "Keyboard controls:\n"
               << "  Enter / Space  Capture full-resolution images\n"
@@ -1524,6 +1543,10 @@ void printUsage(const char* argv0) {
 int main(int argc, char** argv) {
     fs::path configPath = defaultConfigPath();
     bool startFullscreen = true;
+    std::string outputName;
+    int rowNumber = -1;
+    bool hasOutput = false;
+    bool hasRow = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -1535,11 +1558,40 @@ int main(int argc, char** argv) {
             startFullscreen = false;
             continue;
         }
+        if (arg == "-o" || arg == "--output") {
+            if (i + 1 >= argc || std::string(argv[i + 1]).empty() || std::string(argv[i + 1]).rfind("-", 0) == 0) {
+                std::cerr << arg << " requires an output name" << std::endl;
+                printUsage(argv[0]);
+                return 2;
+            }
+            outputName = argv[++i];
+            hasOutput = !outputName.empty();
+            continue;
+        }
+        if (arg == "--row") {
+            if (i + 1 >= argc) {
+                std::cerr << "--row requires a positive number" << std::endl;
+                printUsage(argv[0]);
+                return 2;
+            }
+            hasRow = parsePositiveRowNumber(argv[++i], rowNumber);
+            if (!hasRow) {
+                std::cerr << "--row must be a positive number" << std::endl;
+                printUsage(argv[0]);
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--config" && i + 1 < argc) {
             configPath = argv[++i];
             continue;
         }
         std::cerr << "Unknown argument: " << arg << std::endl;
+        printUsage(argv[0]);
+        return 2;
+    }
+    if (!hasOutput || !hasRow) {
+        std::cerr << "-o/--output and --row are required" << std::endl;
         printUsage(argv[0]);
         return 2;
     }
@@ -1554,7 +1606,8 @@ int main(int argc, char** argv) {
     bool saveDirectoryReady = false;
     std::string saveDirError;
     const std::string sessionTimestamp = nowTimestampForFolder();
-    if (createUniqueSessionDirectory(fs::path(config.saveRoot), sessionTimestamp, config.sessionName, saveDir, saveDirError)) {
+    const std::string outputLabel = makeOutputLabel(outputName, rowNumber);
+    if (createUniqueSessionDirectory(fs::path(config.saveRoot), sessionTimestamp, outputLabel, saveDir, saveDirError)) {
         saveDirectoryReady = true;
     } else {
         startupMessages.push_back(saveDirError);
@@ -1565,6 +1618,8 @@ int main(int argc, char** argv) {
     logger->info("Config path: " + configPath.string());
     logger->info("Save folder: " + saveDir.string());
     logger->info("Session timestamp: " + sessionTimestamp);
+    logger->info("Output label: " + outputLabel);
+    logger->info("Row: " + std::to_string(rowNumber));
     logger->info("Session log: " + (logger->path().empty() ? std::string("unavailable") : logger->path()));
     for (const auto& camera : config.cameras) {
         logger->info(camera.name + " ip=" + camera.ip + " url=" + redactedUrl(camera.url));
