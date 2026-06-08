@@ -60,6 +60,7 @@ struct CameraConfig {
 
 struct AppConfig {
     std::string saveRoot;
+    std::string sessionName;
     std::vector<CameraConfig> cameras;
 };
 
@@ -131,6 +132,19 @@ std::string zeroPad(int value, int width) {
     return oss.str();
 }
 
+std::string sanitizeForFilename(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (unsigned char ch : value) {
+        if (std::isalnum(ch) || ch == '.' || ch == '-' || ch == '_') {
+            out.push_back(static_cast<char>(ch));
+        } else {
+            out.push_back('_');
+        }
+    }
+    return out.empty() ? "unknown" : out;
+}
+
 std::string homeDir() {
     const char* home = std::getenv("HOME");
     if (home != nullptr && *home != '\0') {
@@ -164,6 +178,7 @@ std::string defaultRtspUrlForIp(const std::string& ip) {
 AppConfig defaultConfig() {
     return AppConfig{
         defaultSaveRoot(),
+        "",
         {
             {"Camera 1", "192.168.0.20", defaultRtspUrlForIp("192.168.0.20")},
             {"Camera 2", "192.168.0.21", defaultRtspUrlForIp("192.168.0.21")},
@@ -186,10 +201,22 @@ void useUnconfiguredCameras(AppConfig& config) {
     config.cameras = unconfiguredCameras();
 }
 
-bool createUniqueSessionDirectory(const fs::path& saveRoot, fs::path& saveDir, std::string& error) {
+std::string makeSessionFolderName(const std::string& sessionTimestamp, const std::string& sessionName) {
+    if (sessionName.empty()) {
+        return sessionTimestamp;
+    }
+    return sessionTimestamp + "_" + sanitizeForFilename(sessionName);
+}
+
+bool createUniqueSessionDirectory(
+    const fs::path& saveRoot,
+    const std::string& sessionTimestamp,
+    const std::string& sessionName,
+    fs::path& saveDir,
+    std::string& error) {
     try {
         fs::create_directories(saveRoot);
-        const std::string baseName = nowTimestampForFolder();
+        const std::string baseName = makeSessionFolderName(sessionTimestamp, sessionName);
         for (int suffix = 0; suffix < 1000; ++suffix) {
             std::ostringstream name;
             name << baseName;
@@ -217,6 +244,7 @@ bool isFreshFrameAge(double secondsSinceFrame) {
 std::string appConfigToJson(const AppConfig& config) {
     QJsonObject root;
     root["save_root"] = QString::fromStdString(config.saveRoot);
+    root["session_name"] = QString::fromStdString(config.sessionName);
 
     QJsonArray cameras;
     for (const auto& camera : config.cameras) {
@@ -272,6 +300,7 @@ bool readOptionalJsonString(const QJsonObject& object, const QString& key, std::
 
 bool loadConfig(const fs::path& path, AppConfig& config, std::vector<std::string>& startupMessages) {
     config.saveRoot = defaultSaveRoot();
+    config.sessionName.clear();
     useUnconfiguredCameras(config);
     if (!fs::exists(path)) {
         config = defaultConfig();
@@ -309,6 +338,13 @@ bool loadConfig(const fs::path& path, AppConfig& config, std::vector<std::string
         config.saveRoot = expandTilde(saveRootValue.toString().toStdString());
     } else {
         startupMessages.push_back("Config is missing save_root. Using default save root.");
+    }
+
+    std::string sessionName;
+    if (readOptionalJsonString(root, "session_name", sessionName)) {
+        config.sessionName = sessionName;
+    } else {
+        startupMessages.push_back("Config session_name must be a string. Using automatic timestamp only.");
     }
 
     const QJsonValue camerasValue = root.value("cameras");
@@ -368,19 +404,6 @@ void applyRuntimeRtspCredentials(AppConfig& config, std::vector<std::string>& st
             "Applied RTSP credentials from " + multicamRtspCredentialSource() +
             " for " + std::to_string(updatedCount) + " camera(s).");
     }
-}
-
-std::string sanitizeForFilename(const std::string& value) {
-    std::string out;
-    out.reserve(value.size());
-    for (unsigned char ch : value) {
-        if (std::isalnum(ch) || ch == '.' || ch == '-' || ch == '_') {
-            out.push_back(static_cast<char>(ch));
-        } else {
-            out.push_back('_');
-        }
-    }
-    return out.empty() ? "unknown" : out;
 }
 
 std::string redactedUrl(const std::string& url) {
@@ -1530,7 +1553,8 @@ int main(int argc, char** argv) {
     fs::path saveDir;
     bool saveDirectoryReady = false;
     std::string saveDirError;
-    if (createUniqueSessionDirectory(fs::path(config.saveRoot), saveDir, saveDirError)) {
+    const std::string sessionTimestamp = nowTimestampForFolder();
+    if (createUniqueSessionDirectory(fs::path(config.saveRoot), sessionTimestamp, config.sessionName, saveDir, saveDirError)) {
         saveDirectoryReady = true;
     } else {
         startupMessages.push_back(saveDirError);
@@ -1540,6 +1564,7 @@ int main(int argc, char** argv) {
     logger->info("MultiCam Capture starting");
     logger->info("Config path: " + configPath.string());
     logger->info("Save folder: " + saveDir.string());
+    logger->info("Session timestamp: " + sessionTimestamp);
     logger->info("Session log: " + (logger->path().empty() ? std::string("unavailable") : logger->path()));
     for (const auto& camera : config.cameras) {
         logger->info(camera.name + " ip=" + camera.ip + " url=" + redactedUrl(camera.url));

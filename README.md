@@ -29,12 +29,16 @@ sudo apt install cmake g++ qtbase5-dev libopencv-dev
 
 Keyboard controls: `Enter`/`Space` capture, `R` reconnect, `F` fullscreen,
 `Q`/`Esc` exit. Full-resolution PNGs and `session.log` are written under
-`~/record_data/captures/YYYYMMDD_HHMMSS/`. If keyboard capture is inactive,
-the window shows `CLICK WINDOW TO ENABLE KEYBOARD CAPTURE`.
+`~/record_data/captures/YYYYMMDD_HHMMSS/`. If `session_name` is set in the
+config, the folder becomes `YYYYMMDD_HHMMSS_<session_name>/`. File names stay
+camera-oriented, such as `image_000000_cam0_192.168.0.20.png`. If keyboard
+capture is inactive, the window shows `CLICK WINDOW TO ENABLE KEYBOARD CAPTURE`.
 
 The GUI config file is `~/.config/multicam_capture/config.json`. If it does
 not exist, the app creates a default config for cameras `192.168.0.20` through
 `192.168.0.23`. If this file exists, verify the RTSP URLs before recording.
+Set `session_name` to add an arbitrary label to the automatically dated output
+folder.
 Bad or stale camera streams are shown in red and are not saved as successes.
 Set a camera `url` to an empty string to disable that camera slot. Disabled
 slots are skipped and do not count as failed captures.
