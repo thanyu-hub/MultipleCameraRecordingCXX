@@ -52,6 +52,8 @@ constexpr int kMaxConsecutiveReadFailures = 10;
 constexpr int kWorkerJoinTimeoutMs = 6000;
 constexpr int kSaveJoinTimeoutMs = 6000;
 
+std::timed_mutex gRtspOpenMutex;
+
 struct CameraConfig {
     std::string name;
     std::string ip;
@@ -596,25 +598,44 @@ private:
                 continue;
             }
 
-            setStatus(CameraState::Connecting, "Connecting");
-            if (logger_) {
-                logger_->info(config_.name + " connecting to " + redactedUrl(config_.url));
+            cv::VideoCapture cap;
+            std::string openExceptionMessage;
+            {
+                setStatus(CameraState::Connecting, "Waiting for connection slot");
+                if (logger_) {
+                    logger_->info(config_.name + " waiting for RTSP connection slot");
+                }
+
+                std::unique_lock<std::timed_mutex> openLock(gRtspOpenMutex, std::defer_lock);
+                while (!stopRequested_.load() && !openLock.try_lock_for(std::chrono::milliseconds(50))) {
+                }
+                if (stopRequested_.load()) {
+                    break;
+                }
+
+                setStatus(CameraState::Connecting, "Connecting");
+                if (logger_) {
+                    logger_->info(config_.name + " connecting to " + redactedUrl(config_.url));
+                }
+
+                try {
+                    const std::vector<int> params{
+                        cv::CAP_PROP_OPEN_TIMEOUT_MSEC, kOpenTimeoutMs,
+                        cv::CAP_PROP_READ_TIMEOUT_MSEC, kReadTimeoutMs,
+                    };
+                    cap.open(config_.url, cv::CAP_FFMPEG, params);
+                    if (cap.isOpened()) {
+                        cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+                    }
+                } catch (const std::exception& ex) {
+                    openExceptionMessage = ex.what();
+                }
             }
 
-            cv::VideoCapture cap;
-            try {
-                const std::vector<int> params{
-                    cv::CAP_PROP_OPEN_TIMEOUT_MSEC, kOpenTimeoutMs,
-                    cv::CAP_PROP_READ_TIMEOUT_MSEC, kReadTimeoutMs,
-                };
-                cap.open(config_.url, cv::CAP_FFMPEG, params);
-                if (cap.isOpened()) {
-                    cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
-                }
-            } catch (const std::exception& ex) {
-                setStatus(CameraState::Disconnected, std::string("Open exception: ") + ex.what());
+            if (!openExceptionMessage.empty()) {
+                setStatus(CameraState::Disconnected, "Open exception: " + openExceptionMessage);
                 if (logger_) {
-                    logger_->error(config_.name + " open exception: " + ex.what());
+                    logger_->error(config_.name + " open exception: " + openExceptionMessage);
                 }
                 sleepWithStop(1000);
                 continue;

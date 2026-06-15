@@ -10,7 +10,7 @@ cmake --build build -j
 ## run
 
 ```bash
-./build/multicam_capture_gui -o June28-Ponca --row 13
+./build/multicam_capture_gui --output June28-Ponca --row 13
 ```
 
 For windowed mode:
